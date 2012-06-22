@@ -1,10 +1,13 @@
 package betamax.proxy
 
 import betamax.proxy.jetty.SimpleServer
+import betamax.proxy.ssl.DummyHostNameVerifier
+import betamax.proxy.ssl.DummyJVMSSLSocketFactory
+import betamax.proxy.ssl.DummySSLSocketFactory
 import betamax.util.server.EchoHandler
-import java.security.KeyStore
-import java.security.cert.X509Certificate
-import org.apache.http.conn.ssl.SSLSocketFactory
+
+import java.io.IOException;
+import java.security.Security;
 import org.apache.http.client.HttpClient
 import org.apache.http.client.methods.HttpGet
 import org.apache.http.impl.client.DefaultHttpClient
@@ -14,6 +17,12 @@ import org.eclipse.jetty.server.ssl.SslSelectChannelConnector
 import org.junit.Rule
 import betamax.*
 import javax.net.ssl.*
+import javax.servlet.GenericServlet;
+import javax.servlet.ServletException;
+import javax.servlet.ServletRequest;
+import javax.servlet.ServletResponse;
+import javax.servlet.http.HttpServletResponse
+
 import static org.apache.http.HttpHeaders.VIA
 import static org.apache.http.HttpVersion.HTTP_1_1
 import org.apache.http.conn.scheme.*
@@ -21,16 +30,17 @@ import org.apache.http.conn.ssl.*
 import org.apache.http.params.*
 import static org.apache.http.protocol.HTTP.UTF_8
 import org.eclipse.jetty.server.*
+import org.eclipse.jetty.servlet.ServletContextHandler
+
 import spock.lang.*
 import groovy.transform.InheritConstructors
-import org.apache.http.HttpStatus
 import static org.apache.http.HttpStatus.SC_OK
 
 @Issue("https://github.com/robfletcher/betamax/issues/34")
 class HttpsSpec extends Specification {
 
 	@Shared @AutoCleanup("deleteDir") File tapeRoot = new File(System.properties."java.io.tmpdir", "tapes")
-	@Rule @AutoCleanup("ejectTape") Recorder recorder = new Recorder(tapeRoot: tapeRoot)
+	@Rule @AutoCleanup("ejectTape") Recorder recorder = new Recorder(tapeRoot: tapeRoot, sslSupport: true)
 	@Shared @AutoCleanup("stop") SimpleServer httpsEndpoint = new SimpleSecureServer(5001)
 	@Shared @AutoCleanup("stop") SimpleServer httpEndpoint = new SimpleServer()
 
@@ -40,43 +50,26 @@ class HttpsSpec extends Specification {
 	HttpClient http
 
 	def setupSpec() {
+		def handler = new ServletContextHandler()
+		handler.contextPath = "/"
+		handler.addServlet(HelloServlet, "/*")
+
+
 		httpEndpoint.start(EchoHandler)
-		httpsEndpoint.start(EchoHandler)
+		httpsEndpoint.start(handler)
 
 		httpUri = httpEndpoint.url.toURI()
 		httpsUri = httpsEndpoint.url.toURI()
 	}
 
 	def setup() {
-		def trustStore = KeyStore.getInstance(KeyStore.defaultType)
-		trustStore.load(null, null)
-
-		def sslSocketFactory = new DummySSLSocketFactory(trustStore)
-		sslSocketFactory.hostnameVerifier = new X509HostnameVerifier() {
-			void verify(String host, SSLSocket ssl) {
-				//To change body of implemented methods use File | Settings | File Templates.
-			}
-
-			void verify(String host, X509Certificate cert) {
-				//To change body of implemented methods use File | Settings | File Templates.
-			}
-
-			void verify(String host, String[] cns, String[] subjectAlts) {
-				//To change body of implemented methods use File | Settings | File Templates.
-			}
-
-			boolean verify(String s, SSLSession sslSession) {
-				true
-			}
-		}
-
 		def params = new BasicHttpParams()
 		HttpProtocolParams.setVersion(params, HTTP_1_1)
-		HttpProtocolParams.setContentCharset(params, UTF_8)
+		HttpProtocolParams.setContentCharset(params, "UTF-8")
 
 		def registry = new SchemeRegistry()
 		registry.register new Scheme("http", PlainSocketFactory.socketFactory, 80)
-		registry.register new Scheme("https", sslSocketFactory, 443)
+		registry.register new Scheme("https", DummySSLSocketFactory.getInstance(), 443)
 
 		def connectionManager = new ThreadSafeClientConnManager(params, registry)
 
@@ -100,7 +93,7 @@ class HttpsSpec extends Specification {
 		scheme = uri.scheme
 	}
 
-	@Betamax(tape = "https spec")
+	@Betamax(tape = "https spec", mode = TapeMode.WRITE_ONLY)
 	def "proxy can intercept HTTP requests"() {
 		when: "an HTTPS request is made"
 		def response = http.execute(new HttpGet(httpEndpoint.url))
@@ -110,47 +103,31 @@ class HttpsSpec extends Specification {
 		response.getFirstHeader(VIA)?.value == "Betamax"
 	}
 
-	@Betamax(tape = "https spec")
+	@Betamax(tape = "https spec", mode = TapeMode.WRITE_ONLY)
 	def "proxy can intercept HTTPS requests"() {
 		when: "an HTTPS request is made"
 		def response = http.execute(new HttpGet(httpsEndpoint.url))
+		def responseBytes = new ByteArrayOutputStream()
+		response.entity.writeTo(responseBytes)
+		def responseString = responseBytes.toString("UTF-8")
 
 		then: "it is intercepted by the proxy"
 		response.statusLine.statusCode == SC_OK
 		response.getFirstHeader(VIA)?.value == "Betamax"
+		responseString == 'Hello World!'
 	}
 
-}
 
-class DummySSLSocketFactory extends SSLSocketFactory {
-	SSLContext sslContext = SSLContext.getInstance("TLS")
-
-	public DummySSLSocketFactory(KeyStore trustStore) {
-		super(trustStore)
-
-		def trustManager = new X509TrustManager() {
-			void checkClientTrusted(X509Certificate[] chain, String authType) { }
-
-			void checkServerTrusted(X509Certificate[] chain, String authType) { }
-
-			X509Certificate[] getAcceptedIssuers() {
-				null
-			}
-		}
-
-		sslContext.init(null, [trustManager] as TrustManager[], null)
-	}
-
-	@Override
-	Socket createSocket(Socket socket, String host, int port, boolean autoClose) {
-		sslContext.socketFactory.createSocket(socket, host, port, autoClose)
-	}
-
-	@Override
-	Socket createSocket() throws IOException {
-		sslContext.socketFactory.createSocket()
+	@Betamax(tape = "https spec", mode = TapeMode.WRITE_ONLY)
+	def "https request gets proxied"() {
+		when:
+		def u = new java.net.URL(httpsEndpoint.url)
+		def content = u.text
+		then:
+		content == "Hello World!"
 	}
 }
+
 
 @InheritConstructors
 class SimpleSecureServer extends SimpleServer {
@@ -173,8 +150,19 @@ class SimpleSecureServer extends SimpleServer {
 		connector.password = "password"
 		connector.keyPassword = "password"
 
-		server.connectors = [connector] as Connector[]
+		server.connectors = [connector]as Connector[]
 
 		server
+	}
+}
+
+class HelloServlet extends GenericServlet {
+
+	@Override
+	public void service(ServletRequest req, ServletResponse res)
+	throws ServletException, IOException {
+		HttpServletResponse response = res
+		response.setContentType("text/plain")
+		response.writer << "Hello World!"
 	}
 }

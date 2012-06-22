@@ -17,6 +17,8 @@
 package betamax
 
 import betamax.proxy.jetty.ProxyServer
+import betamax.proxy.ssl.DummyHostNameVerifier
+import betamax.proxy.ssl.DummyJVMSSLSocketFactory
 import betamax.tape.StorableTape
 import betamax.tape.yaml.YamlTapeLoader
 import org.junit.rules.MethodRule
@@ -25,6 +27,8 @@ import static betamax.TapeMode.READ_WRITE
 import static java.util.Collections.EMPTY_MAP
 import org.junit.runners.model.*
 import betamax.util.SystemPropertyUtils
+
+import java.security.Security
 import java.util.logging.Logger
 
 /**
@@ -91,13 +95,20 @@ class Recorder implements MethodRule {
 	 * This is equivalent to setting `ignoreHosts` to `["localhost", "127.0.0.1", InetAddress.localHost.hostName, InetAddress.localHost.hostAddress]`.
 	 */
 	boolean ignoreLocalhost = false
+	
+	/**
+	 * If set to true add support for proxying SSL (disable certificate checking)
+	 */
+	boolean sslSupport = false
+	
 
     String getProxyHost() {
         proxy.url.toURI().host
     }
 
     int getHttpsProxyPort() {
-        proxyPort + 1
+        //proxyPort + 1
+		proxyPort
     }
 
 	private StorableTape tape
@@ -184,6 +195,10 @@ class Recorder implements MethodRule {
 		if (!proxy.running) {
 			proxy.port = proxyPort
 			proxy.start(this)
+		}
+		if(sslSupport) {
+			Security.setProperty("ssl.SocketFactory.provider", DummyJVMSSLSocketFactory.name)
+			DummyHostNameVerifier.useForHttpsURLConnection()
 		}
 		insertTape(tapeName, arguments)
 		overrideProxySettings()

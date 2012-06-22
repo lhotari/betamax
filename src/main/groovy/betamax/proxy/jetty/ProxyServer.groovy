@@ -16,19 +16,21 @@
 
 package betamax.proxy.jetty
 
+import java.io.IOException;
+import java.net.InetSocketAddress;
+import java.nio.channels.SocketChannel;
+
 import betamax.Recorder
-import javax.servlet.ServletRequest
-import javax.servlet.ServletResponse
-import javax.servlet.http.HttpServletResponse
+import betamax.proxy.RecordAndPlaybackProxyInterceptor
+
 import org.eclipse.jetty.server.Connector
+import org.eclipse.jetty.server.Handler;
 import org.eclipse.jetty.server.Server
+import org.eclipse.jetty.server.handler.ConnectHandler;
 import org.eclipse.jetty.server.ssl.SslSelectChannelConnector
-import org.eclipse.jetty.servlet.ServletContextHandler
-import org.eclipse.jetty.servlets.ProxyServlet
 import static betamax.Recorder.DEFAULT_PROXY_PORT
 import static org.eclipse.jetty.http.HttpHeaders.VIA
 import javax.servlet.http.HttpServletRequest
-import betamax.proxy.RecordAndPlaybackProxyInterceptor
 
 class ProxyServer extends SimpleServer {
 
@@ -37,15 +39,13 @@ class ProxyServer extends SimpleServer {
 	}
 
 	void start(Recorder recorder) {
-//		def handler = new ProxyHandler()
-//		handler.interceptor = new RecordAndPlaybackProxyInterceptor(recorder)
-//		handler.timeout = recorder.proxyTimeout
+		def handler = new ProxyHandler(recorder.sslSupport)
+		handler.interceptor = new RecordAndPlaybackProxyInterceptor(recorder)
+		handler.timeout = recorder.proxyTimeout
 
-        def handler = new ServletContextHandler()
-        handler.contextPath = "/"
-        handler.addServlet(ViaSettingProxyServlet, "/*")
+		def connectHandler = new CustomConnectHandler(handler, port+1)
 
-		super.start(handler)
+		super.start(connectHandler)
 	}
 
     @Override
@@ -65,19 +65,19 @@ class ProxyServer extends SimpleServer {
     }
 }
 
-class ViaSettingProxyServlet extends ProxyServlet {
-    @Override
-    void service(ServletRequest req, ServletResponse res) {
-        println "service..."
-        ((HttpServletResponse)res).addHeader(VIA, getClass().simpleName)
-        super.service(req, res)
-    }
-
-    @Override
-    void handleConnect(HttpServletRequest request, HttpServletResponse response) {
-        println "handleConnect..."
-        response.addHeader(VIA, getClass().simpleName)
-        super.handleConnect(request, response)
-    }
-
+class CustomConnectHandler extends ConnectHandler {
+	int sslPort
+	
+	public CustomConnectHandler(Handler handler, int sslPort) {
+		super(handler)
+		this.sslPort=sslPort
+	}
+	
+	@Override
+	protected SocketChannel connect(HttpServletRequest request, String host, int port) throws IOException {
+		SocketChannel channel = SocketChannel.open();
+		channel.socket().setTcpNoDelay(true);
+		channel.socket().connect(new InetSocketAddress("127.0.0.1", sslPort), getConnectTimeout());
+		return channel;
+	}
 }

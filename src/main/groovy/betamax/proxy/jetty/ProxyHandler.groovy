@@ -27,11 +27,13 @@ import org.eclipse.jetty.server.Request
 import org.eclipse.jetty.server.handler.AbstractHandler
 import betamax.proxy.*
 import betamax.proxy.servlet.*
+import betamax.proxy.ssl.DummySSLSocketFactory;
 import static java.net.HttpURLConnection.*
 import static java.util.logging.Level.SEVERE
 import javax.servlet.http.*
 import static org.apache.http.HttpHeaders.*
 import org.apache.http.client.methods.*
+import org.apache.http.conn.scheme.Scheme
 
 class ProxyHandler extends AbstractHandler {
 
@@ -54,11 +56,19 @@ class ProxyHandler extends AbstractHandler {
 	private static final String PROXY_CONNECTION = "Proxy-Connection"
 	private static final String KEEP_ALIVE = "Keep-Alive"
 
-	HttpClient httpClient = new DefaultHttpClient(new ThreadSafeClientConnManager())
+	HttpClient httpClient
 	int timeout
 	VetoingProxyInterceptor interceptor
 
 	private final Logger log = Logger.getLogger(ProxyHandler.name)
+	
+	public ProxyHandler(boolean sslSupport) {
+		def connectionManager = new ThreadSafeClientConnManager()
+		httpClient = new DefaultHttpClient(connectionManager)
+		if(sslSupport) {
+			connectionManager.schemeRegistry.register new Scheme("https", DummySSLSocketFactory.getInstance(), 443)
+		}
+	}
 
 	void handle(String target, Request baseRequest, HttpServletRequest request, HttpServletResponse response) {
 		log.fine "proxying request $request.method: $request.requestURI..."
